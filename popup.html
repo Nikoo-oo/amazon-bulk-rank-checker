@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>亚马逊批量查排名</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    background: #f5f7fa; color: #2c3e50; font-size: 13px;
+  }
+  .header {
+    max-width: 1700px; margin: 0 auto;
+    padding: 14px 20px 4px 36px; display: flex; align-items: center;
+  }
+  .header h1 { font-size: 18px; font-weight: 700; color: #1b6eea; letter-spacing: .5px; }
+  .wrap { padding: 10px 20px 30px; max-width: 1700px; margin: 0 auto; }
+
+  .card {
+    background: #fff; border: 1px solid #e3e8ef; border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  }
+  .card h2 { font-size: 13px; color: #5a6b80; font-weight: 600; margin-bottom: 10px; }
+
+  .ctrl-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ctrl-row label { color: #5a6b80; font-weight: 600; white-space: nowrap; }
+  select {
+    height: 32px; border: 1px solid #ccd5e0; border-radius: 6px; padding: 0 8px;
+    background: #fff; color: #2c3e50; font-size: 13px; outline: none;
+  }
+  select:focus { border-color: #1b6eea; }
+  input[type="text"] {
+    height: 32px; border: 1px solid #ccd5e0; border-radius: 6px; padding: 0 8px;
+    background: #fff; color: #2c3e50; font-size: 13px; outline: none; width: 150px;
+  }
+  input[type="text"]:focus { border-color: #1b6eea; }
+
+  /* 按钮：图标 + 渐变 + 悬浮动效 */
+  .btn {
+    height: 34px; border: 0; border-radius: 8px; padding: 0 16px; cursor: pointer;
+    font-size: 13px; font-weight: 600; color: #fff; display: inline-flex;
+    align-items: center; gap: 7px; box-shadow: 0 2px 6px rgba(0,0,0,.14);
+    transition: transform .12s, box-shadow .12s, opacity .15s, filter .15s;
+  }
+  .btn svg { flex: 0 0 auto; }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,.18); filter: brightness(1.06); }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; filter: none; }
+  .btn-primary { background: linear-gradient(135deg, #2563eb, #1d4ed8); }
+  .btn-danger  { background: linear-gradient(135deg, #ef4444, #dc2626); }
+  .btn-green   { background: linear-gradient(135deg, #22c55e, #16a34a); }
+
+  textarea {
+    width: 100%; min-height: 120px; border: 1px solid #ccd5e0; border-radius: 8px;
+    padding: 10px 12px; font-size: 13px; font-family: Consolas, "Courier New", monospace;
+    color: #2c3e50; resize: vertical; outline: none; line-height: 1.7;
+  }
+  textarea:focus { border-color: #1b6eea; }
+  .tip { color: #8a97a8; font-size: 12px; margin-top: 6px; line-height: 1.7; }
+
+  .progress-wrap { display: none; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .progress-wrap.show { display: flex; }
+  .progress-outer { flex: 1; height: 12px; background: #e9eef5; border-radius: 6px; overflow: hidden; }
+  .progress-inner {
+    height: 100%; width: 0; background: linear-gradient(90deg, #1b6eea, #42a5f5);
+    border-radius: 6px; transition: width .2s;
+  }
+  #statusText { color: #5a6b80; font-size: 12px; min-width: 200px; }
+
+  .table-wrap { overflow: auto; max-height: 72vh; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; white-space: nowrap; }
+  thead th {
+    background: #eef3fa; color: #3d4f66; font-weight: 600; padding: 8px 10px;
+    border-bottom: 2px solid #d5dfec; text-align: center;
+  }
+  thead tr:first-child th { border-bottom: 1px solid #d5dfec; }
+  thead th.top-group { background: #e3edfb; color: #1b6eea; }
+  thead th.top-group.ad { background: #fdf0e0; color: #d97706; }
+  tbody td { padding: 7px 10px; border-bottom: 1px solid #eef1f5; text-align: center; color: #333; vertical-align: top; }
+  tbody tr:hover { background: #f6faff; }
+  td.kw { text-align: left; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  td.rank-hit { color: #c0392b; font-weight: 700; }
+  td.rank-none { color: #b0b8c4; }
+  .empty-tip { color: #8a97a8; text-align: center; padding: 40px 0; font-size: 13px; }
+
+  /* 行内 TOP 列（自然 TOP6 / 广告 TOP6）：图片 + ASIN 紧凑显示（ASIN 换行） */
+  td.top-cell { padding: 2px; min-width: 62px; }
+  td.top-cell a {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    text-decoration: none; color: inherit;
+  }
+  td.top-cell img {
+    width: 55px; height: 55px; object-fit: contain; background: #fff;
+    border: 1px solid #e3e8ef; border-radius: 4px;
+  }
+  td.top-cell .ta {
+    font-size: 8.5px; color: #1b6eea; word-break: break-all; line-height: 1.3;
+    text-align: center; max-width: 62px; font-family: Consolas, monospace;
+  }
+  td.top-cell .ta.ta-hit { color: #c0392b; font-weight: 700; }
+  /* 空 cell 占位（无广告时该列不显空白） */
+  td.top-cell:empty::before {
+    content: "-"; color: #d4dae3; font-weight: 400; font-size: 16px;
+  }
+  /* 自然 TOP6 与广告 TOP6 之间的细分隔线 */
+  thead th.top-group.ad, th.ad-sep, td.ad-sep {
+    border-left: 1.5px solid #c8d3e2;
+  }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>亚马逊批量查排名</h1>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="ctrl-row" style="margin-bottom:10px;">
+        <label>站点</label>
+        <select id="siteSelect"></select>
+        <label>翻页深度</label>
+        <select id="maxPages">
+          <option value="1">1 页</option>
+          <option value="2">2 页</option>
+          <option value="3">3 页</option>
+          <option value="5" selected>5 页</option>
+        </select>
+        <label>邮编</label>
+        <input id="zipInput" type="text" placeholder="邮编(可选)" maxlength="12">
+        <button class="btn btn-primary" id="btnRun">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="7" cy="7" r="5"/><line x1="11" y1="11" x2="14.5" y2="14.5"/></svg>
+          开始查询
+        </button>
+        <button class="btn btn-danger" id="btnStop" disabled>
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1.6"/></svg>
+          停止
+        </button>
+        <button class="btn btn-green" id="btnExport" disabled>
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8"/><path d="M4.5 7L8 10.5 11.5 7"/><line x1="2.5" y1="13.5" x2="13.5" y2="13.5"/></svg>
+          导出 Excel
+        </button>
+      </div>
+      <textarea id="inputBox" placeholder="ASIN&#9;Keyword1
+ASIN&#9;Keyword1&#9;Keyword2
+ASIN,Keyword1,Keyword2"></textarea>
+      <div class="tip">支持直接粘贴 Excel 两列(ASIN列&#9;关键词列)，兼容「关键词,ASIN」格式，本地直接查询亚马逊页面，建议每批查询关键词小于50个。<b style="color:#c0392b">提示：</b>如果批量多次不显示广告产品，说明 IP被亚马逊标记，需清浏览器Cookie或间隔查询。</div>
+    </div>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-outer"><div class="progress-inner" id="progressBar"></div></div>
+      <span id="statusText">准备中…</span>
+    </div>
+
+    <div class="card">
+      <h2>查询结果</h2>
+      <div class="table-wrap">
+        <table id="resultTable">
+          <thead>
+            <tr>
+              <th rowspan="2">站点</th>
+              <th rowspan="2">ASIN</th>
+              <th rowspan="2">关键词</th>
+              <th rowspan="2">自然排名</th>
+              <th rowspan="2">广告排名</th>
+              <th rowspan="2">自然排名(移动端)</th>
+              <th rowspan="2">广告排名(移动端)</th>
+              <th colspan="6" class="top-group">自然排名 TOP6 产品（PC搜索页）</th>
+              <th colspan="6" class="top-group ad">广告排名 TOP6 产品（PC搜索页）</th>
+            </tr>
+            <tr>
+              <th>TOP1</th><th>TOP2</th><th>TOP3</th><th>TOP4</th><th>TOP5</th><th>TOP6</th>
+              <th class="ad-sep">TOP1</th><th>TOP2</th><th>TOP3</th><th>TOP4</th><th>TOP5</th><th>TOP6</th>
+            </tr>
+          </thead>
+          <tbody id="resultBody">
+            <tr><td colspan="19" class="empty-tip">粘贴 ASIN 和关键词后点击「开始查询」</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="static/js/jquery.min.js"></script>
+  <script src="static/js/xlsx.full.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
