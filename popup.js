@@ -1,5 +1,10 @@
 /* ============================================================
- * 亚马逊批量查排名 v1.1.16（本地自用改造版）
+ * 亚马逊批量查排名 v1.1.17（本地自用改造版）
+ * - v1.1.17：修复移动端排名与 PC 完全相同——根因：扩展 XHR 里 setRequestHeader
+ *   设置 User-Agent 属于浏览器禁止头（被静默忽略，与 Sec-Fetch-* 同机制），
+ *   移动端请求实际一直发的是桌面 UA。修复：改用 declarativeNetRequest
+ *   会话规则改 UA——移动端请求 URL 加 mobtag=1 标记参数，DNR 规则匹配到
+ *   该参数就把请求头 User-Agent 换成 iPhone UA（MV3 标准做法）。
  * - v1.1.16：修复"页面上有 SP 广告但插件抓不到"（漏抓根因）——浏览器实测确认
  *   亚马逊对连续/高频搜索请求做请求级随机降级，部分请求返回无广告基础版（48 项 0 广告，
  *   完整版 60 项 12 广告）。修复：①删除 Cache-Control/Pragma no-cache 头（与基础版强相关）；
@@ -37,7 +42,41 @@ var SITES = [
 ];
 
 var UA_PC     = navigator.userAgent; // 当前浏览器（桌面）
-var UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1';
+var UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+
+/* ---------------- 移动端 UA 伪装（v1.1.17，MV3 标准做法） ----------------
+ * 根因：扩展 XHR 里 xhr.setRequestHeader('User-Agent', ...) 属于浏览器禁止头，
+ * 会被静默忽略（console 告警 "Refused to set unsafe header"），即使有
+ * host_permissions 也不行——v1.1.16 之前移动端查询实际一直发桌面 UA，
+ * 导致移动排名与 PC 完全相同。
+ * 修复：用 declarativeNetRequest 会话规则在 network 层改 UA——
+ * 移动端搜索 URL 追加 mobtag=1 标记参数（亚马逊忽略未知参数），DNR 规则
+ * 匹配到该参数即把请求头 User-Agent 换成 UA_MOBILE。规则在页面加载时
+ * 注册（幂等：先删同 id 再加），仅本浏览器会话有效。 */
+var DNR_RULE_ID = 1;
+function registerMobileUaRule() {
+  if (!chrome.declarativeNetRequest || !chrome.declarativeNetRequest.updateSessionRules) return;
+  chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [DNR_RULE_ID],
+    addRules: [{
+      id: DNR_RULE_ID,
+      priority: 1,
+      action: {
+        type: 'modifyHeaders',
+        requestHeaders: [
+          { header: 'User-Agent', operation: 'set', value: UA_MOBILE }
+        ]
+      },
+      condition: {
+        regexFilter: '^https://www\\.amazon\\.[a-z.]+/s\\?.*mobtag=1',
+        resourceTypes: ['xmlhttprequest']
+      }
+    }]
+  }, function () {
+    if (chrome.runtime.lastError) console.warn('DNR 规则注册失败：', chrome.runtime.lastError.message);
+  });
+}
+registerMobileUaRule();
 
 /* 浏览器特征请求头（v1.1.8 起：完整化让 XHR 看起来像真实浏览器请求）。
  * v1.1.16 实测：Cache-Control: no-cache + Pragma: no-cache 与亚马逊"无广告基础版"返回强相关
@@ -104,7 +143,8 @@ function fetchText(url, ua, timeout, opt) {
       headers: headers,
       data: opt.body,
       xhrFields: { withCredentials: true },   /* 携带浏览器 cookie（扩展共享） */
-      beforeSend: function (xhr) { if (ua) xhr.setRequestHeader('User-Agent', ua); },
+      /* 注意：不在此处设置 User-Agent——XHR 禁止手动设置该头（v1.1.17 改用 DNR 规则，
+       * 见 registerMobileUaRule；桌面端用浏览器默认 UA 即可） */
       success: resolve,
       error: function (xhr, st) { reject(new Error(st || '网络错误')); }
     });
@@ -298,8 +338,11 @@ function isSuspiciousBasic(r, targetAsin) {
 function searchPage(task, page, mobile) {
   var url = 'https://www.amazon.' + task.site.domain + '/s?k=' + encodeURIComponent(task.kw) + '&qid=' + Date.now();
   if (page > 1) url += '&page=' + page;   // 第 1 页不带 page 参数，与浏览器一致
-  var ua = mobile ? UA_MOBILE : UA_PC;
-  return fetchText(url, ua, 10000)
+  /* v1.1.17：移动端请求加 mobtag=1 标记——DNR 会话规则匹配到该参数后
+   * 在 network 层把 User-Agent 换成 iPhone UA（XHR 层设置 UA 无效，详见文件头注释）。
+   * 亚马逊忽略未知查询参数，不影响结果。 */
+  if (mobile) url += '&mobtag=1';
+  return fetchText(url, mobile ? UA_MOBILE : UA_PC, 10000)
     .then(function (html) {
       var r = parseSearchHtml(html, task.asin);
       if (r.captcha) captchaCount++;
