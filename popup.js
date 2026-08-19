@@ -1,5 +1,10 @@
 /* ============================================================
- * 亚马逊批量查排名 v1.1.15（本地自用改造版）
+ * 亚马逊批量查排名 v1.1.16（本地自用改造版）
+ * - v1.1.16：修复"页面上有 SP 广告但插件抓不到"（漏抓根因）——浏览器实测确认
+ *   亚马逊对连续/高频搜索请求做请求级随机降级，部分请求返回无广告基础版（48 项 0 广告，
+ *   完整版 60 项 12 广告）。修复：①删除 Cache-Control/Pragma no-cache 头（与基础版强相关）；
+ *   ②删除"目标 ASIN 不在结果中即重试"误判（完整版下目标不在就是真不在，广告 TOP6 照常列出）；
+ *   ③基础版重试 3 次 → 4 次，间隔 5s/10s/15s/20s 递增随机，提高命中完整版概率
  * - v1.1.15：修复浏览器报错 "Refused to set unsafe header"——从请求头中删除
  *   Sec-Fetch 系列头 / Accept-Encoding / Upgrade-Insecure-Requests（浏览器禁止手动设置）；
  *   并明确广告范围：仅检查 SP 广告（Sponsored Products），SB 广告（品牌横幅/轮播、
@@ -34,20 +39,18 @@ var SITES = [
 var UA_PC     = navigator.userAgent; // 当前浏览器（桌面）
 var UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1';
 
-/* 浏览器特征请求头（v1.1.8 关键：完整化让 XHR 看起来像真实浏览器请求，避免被识别为爬虫返回去广告版）。
+/* 浏览器特征请求头（v1.1.8 起：完整化让 XHR 看起来像真实浏览器请求）。
+ * v1.1.16 实测：Cache-Control: no-cache + Pragma: no-cache 与亚马逊"无广告基础版"返回强相关
+ * （带此头 5 连发时第 4/5 个请求被降级；真实浏览器导航不带 no-cache），已删除。
  * 注意：Sec-Fetch 系列头 / Accept-Encoding / Upgrade-Insecure-Requests 属于浏览器禁止手动设置的安全头，
  * 在扩展 XHR 里设置会抛出 "Refused to set unsafe header" 导致请求失败。只保留安全的头。 */
 var BASE_HDR_PC = {
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-  'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
-  'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache'
+  'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7'
 };
 var BASE_HDR_MOBILE = {
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache'
+  'Accept-Language': 'en-US,en;q=0.9'
 };
 /* 真实浏览器 UA 通常带 Chrome 版本，sec-ch-ua 头部同步对齐；
  * 但我们不知道当前浏览器的 sec-ch-ua，所以不设——亚马逊对不带 sec-ch-ua 的请求容忍度比
@@ -275,19 +278,21 @@ function parseSearchHtml(html, targetAsin) {
 function sleep(ms) {
   return new Promise(function (r) { setTimeout(r, ms); });
 }
-/* 亚马逊对连续/高频请求会返回"无广告基础版"（无赞助标记、结果数不定）。
- * v1.1.8 实测根因：session 被识别为爬虫时，连 B0H2YWDCQJ 这种目标 ASIN 都不在结果中。
- * 因此基础版判定：0广告+结果≥8 / 结果<8 异常 / 目标 ASIN 不在结果中 → 都重试。
- * v1.1.9：重试间隔缩短为 1.5s/3s/5s——只在遇到基础版时才慢下来，正常查询保持快速。 */
+/* 亚马逊对连续/高频请求会随机返回"无广告基础版"（无赞助标记、结果 48 项左右）。
+ * v1.1.16 浏览器实测：同一 session 同一关键词，请求级随机降级——约半数请求返回基础版
+ * （48 项 0 广告），半数返回完整版（60 项 12 广告）；带 Cache-Control:no-cache 概率更高。
+ * 基础版判定（v1.1.16 简化，适配"无论目标 ASIN 有无排名都要列出全部广告"的口径）：
+ * 1) 0 广告 + 结果≥8 → 疑似基础版，重试
+ * 2) 结果 <8 → 异常页，重试
+ * 删除旧版"目标 ASIN 不在结果中即重试"：完整版页面下目标不在就是真不在（可能在 5 页后
+ * 或无自然排名），重试纯浪费时间；0 广告时已由规则 1 覆盖重试。
+ * v1.1.9：重试间隔只在遇到基础版时才慢下来，正常查询保持快速。 */
 function isSuspiciousBasic(r, targetAsin) {
   if (!r || r.captcha) return false;
-  /* 情形 1：完全没广告 */
+  /* 情形 1：完全没广告（正常完整版 SP 广告 2~16 个） */
   if (r.sponsTotal === 0 && r.total >= 8) return true;
   /* 情形 2：结果数过少（<8 即异常，正常 PC 搜索首页 16+ 项） */
   if (r.total > 0 && r.total < 8) return true;
-  /* 情形 3：结果数虽正常但目标 ASIN 在结果列表中也没出现且自然位也没命中。
-   * 这种情况通常是 session 已经被去广告化，首页给出的"全无广告 + 缺目标 ASIN"版 */
-  if (targetAsin && r.total >= 8 && r.targetInResults === false) return true;
   return false;
 }
 function searchPage(task, page, mobile) {
@@ -311,10 +316,11 @@ function searchAll(task, mobile) {
     return searchPage(task, p, mobile).then(function (r) {
       if (p === 1) {
         page1 = r;
-        /* 遇到基础版才重试（正常查询不受影响）；重试间隔随机抖动 ±25%，避免固定等待模式 */
-        if (tries < 3 && isSuspiciousBasic(r, task.asin)) {
+        /* 遇到基础版才重试（v1.1.16：最多 4 次、间隔 5s/10s/15s/20s 递增 + ±25% 随机抖动。
+         * 基础版是请求级随机降级，更长间隔才能等到完整版；正常查询不受影响）。 */
+        if (tries < 4 && isSuspiciousBasic(r, task.asin)) {
           adSoFar = null; organicOffset = 0; adOffset = 0;
-          var base = [1500, 3000, 5000][tries] || 5000;
+          var base = [5000, 10000, 15000, 20000][tries] || 20000;
           var delay = Math.round(base * (0.75 + Math.random() * 0.5));
           return sleep(delay).then(function () { return one(1, tries + 1); });
         }
