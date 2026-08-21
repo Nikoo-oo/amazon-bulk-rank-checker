@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "亚马逊批量查排名",
   "description": "批量查询 ASIN 在亚马逊搜索结果中的自然排名与广告排名（电脑端 + 移动端），行内展示关键词自然排名 TOP6 产品，支持一键导出 Excel。纯本地抓取，无需登录。",
-  "version": "1.1.17",
+  "version": "1.1.18",
   "host_permissions": [
     "https://www.amazon.com/*",
     "https://www.amazon.ca/*",
